@@ -32,6 +32,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	log.Println("Start processing")
 	for {
 		imgItem, err := src.Next()
 		if err != nil {
