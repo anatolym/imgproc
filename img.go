@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"image"
-	"sort"
 	// Initializing packages for supporting GIF, JPEG and PNG formats.
 	_ "image/gif"
 	_ "image/jpeg"
@@ -20,9 +19,12 @@ type Color struct {
 // ColorList represents slice of Colors.
 type ColorList []Color
 
-func (cl ColorList) Len() int           { return len(cl) }
-func (cl ColorList) Less(i, j int) bool { return cl[i].Count > cl[j].Count }
-func (cl ColorList) Swap(i, j int)      { cl[i], cl[j] = cl[j], cl[i] }
+func (cl ColorList) insert(color Color, key int) {
+	for i := len(cl) - 1; i > key; i-- {
+		cl[i] = cl[i-1]
+	}
+	cl[key] = color
+}
 
 // Analyze performs image analysis and returns slice of top n most prevalent colors of an image.
 func Analyze(data []byte, n int) (ColorList, error) {
@@ -44,19 +46,26 @@ func Analyze(data []byte, n int) (ColorList, error) {
 			colors[hex]++
 		}
 	}
-
-	cl := make(ColorList, len(colors))
-	i := 0
-	for hex, count := range colors {
-		cl[i] = Color{hex, count}
-		i++
-	}
-	sort.Sort(cl)
 	var size int
-	if len(cl) >= n {
+	if len(colors) >= n {
 		size = n
 	} else {
-		size = len(cl)
+		size = len(colors)
 	}
-	return cl[0:size], nil
+
+	cl := make(ColorList, size)
+	for hex, count := range colors {
+		for key := size - 1; key >= 0; key-- {
+			if cl[key].Count > count {
+				if key < size-1 {
+					cl.insert(Color{hex, count}, key+1)
+				}
+				break
+			} else if key == 0 {
+				cl.insert(Color{hex, count}, 0)
+			}
+		}
+	}
+
+	return cl, nil
 }
