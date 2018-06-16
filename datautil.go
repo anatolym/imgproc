@@ -49,22 +49,30 @@ func NewFileSrc(fileName string, loadNum int) (*FileSrc, error) {
 }
 
 // GetImgItemCh returns a ImgItemCh channel of pointers to ImgItem objects to be processed.
-func (src *FileSrc) GetImgItemCh() ImgItemCh {
+func (src *FileSrc) GetImgItemCh(done <-chan struct{}) ImgItemCh {
 	imgItemCh := make(ImgItemCh, src.loadNum)
 	go func() {
 		defer close(imgItemCh) // Closing channel at the end of iterating over file lines.
 		file, err := os.Open(src.FileName)
 		if err != nil {
 			log.Printf("Error opening file %s: %s", src.FileName, err)
+			return
 		}
 		defer file.Close()
 
 		scanner := bufio.NewScanner(file)
 		sem := make(chan struct{}, src.loadNum)
 		var wg sync.WaitGroup
+		defer wg.Wait() // Waiting for processing of all line in goroutines.
 		for scanner.Scan() {
 			// Downloading images in "loadNum" number of goroutines.
-			sem <- struct{}{}
+			select {
+			case <-done:
+				log.Println("Iterating over file lines was cancelled")
+				return
+			case sem <- struct{}{}:
+			}
+
 			wg.Add(1)
 			go func(url string) {
 				defer wg.Done()
@@ -87,22 +95,26 @@ func (src *FileSrc) GetImgItemCh() ImgItemCh {
 		if err := scanner.Err(); err != nil {
 			log.Fatalf("Error reading file %s: %s", src.FileName, err)
 		}
-		// Waiting for processing of all line in goroutines.
-		wg.Wait()
 	}()
 	return imgItemCh
 }
 
 // ProcessItems processes ImgItem objects coming from ImgItemCh channel in "workersNum"
 // goroutines and returns ResultItemCh channel of processed results.
-func ProcessItems(imgItemCh ImgItemCh, resultN, workersNum int) ResultItemCh {
+func ProcessItems(done <-chan struct{}, imgItemCh ImgItemCh, resultN, workersNum int) ResultItemCh {
 	resultItemCh := make(ResultItemCh)
 	go func() {
 		defer close(resultItemCh)
 		sem := make(chan struct{}, workersNum)
 		var wg sync.WaitGroup
+		defer wg.Wait()
 		for imgItem := range imgItemCh {
-			sem <- struct{}{}
+			select {
+			case <-done:
+				log.Println("ProcessItems was cancelled")
+				return
+			case sem <- struct{}{}:
+			}
 			wg.Add(1)
 			go func(imgItem *ImgItem) {
 				defer wg.Done()
@@ -112,10 +124,9 @@ func ProcessItems(imgItemCh ImgItemCh, resultN, workersNum int) ResultItemCh {
 					log.Printf("Error during processing image %s: %s", imgItem.Name, err)
 					return
 				}
-				resultItemCh <- &ResultItem{imgItem.Name, results}
+				resultItemCh <- ResultItem{imgItem.Name, results}
 			}(imgItem)
 		}
-		wg.Wait()
 	}()
 	return resultItemCh
 }
@@ -133,7 +144,7 @@ type ResultItem struct {
 }
 
 // ResultItemCh represents channel of pointers to ResultItem.
-type ResultItemCh chan *ResultItem
+type ResultItemCh chan ResultItem
 
 // NewCsvResult creates new CsvResult.
 func NewCsvResult(fileName string, colNum int) (*CsvResult, error) {
@@ -169,11 +180,14 @@ func (r *CsvResult) append(line string) error {
 	if err != nil {
 		return fmt.Errorf("os.OpenFile returns an error: %s", err)
 	}
+	defer func() {
+		if err := f.Close(); err != nil {
+			log.Printf("file.Close returns an error: %s", err)
+		}
+	}()
+
 	if _, err := f.Write([]byte(line + "\n")); err != nil {
 		return fmt.Errorf("file.Write returns an error: %s", err)
-	}
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("file.Close returns an error: %s", err)
 	}
 	return nil
 }

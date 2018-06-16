@@ -8,11 +8,13 @@ import (
 	"github.com/anatolym/imgproc"
 )
 
-var srcFile = flag.String("s", "", "path to source file")
+const defaultLoadNum = 10
+
+var srcFile = flag.String("s", "", "path to source file with image URLs")
 var resultFile = flag.String("r", "", "path to result CSV file")
 var resultN = flag.Int("n", 1, "count of most prevalent colors included to the results")
-var loadNum = flag.Int("d", 0, "number of download workers operating simultaneously")
-var workersNum = flag.Int("w", 0, "number of image processing workers operating simultaneously")
+var loadNum = flag.Int("d", defaultLoadNum, "number of download workers operating simultaneously")
+var workersNum = flag.Int("w", 0, "number of image processing workers operating simultaneously (default 'count of CPU - 1')")
 
 func main() {
 	flag.Parse()
@@ -28,8 +30,7 @@ func main() {
 	if *loadNum <= 0 {
 		// This option allows to run download in parallel.
 		// Assuming download time is greater than processing time.
-		// Default is 10 threads (goroutines).
-		*loadNum = 10
+		*loadNum = defaultLoadNum
 		log.Printf("Number of download workers operating simultaneously: %d", *loadNum)
 	}
 	if *workersNum <= 0 {
@@ -49,9 +50,11 @@ func main() {
 		log.Fatal(err)
 	}
 	log.Println("Start processing")
-
-	for res := range imgproc.ProcessItems(src.GetImgItemCh(), *resultN, *workersNum) {
-		if err := csv.Add(res); err != nil {
+	done := make(chan struct{})
+	defer close(done)
+	// Getting results and saving it to CSV.
+	for res := range imgproc.ProcessItems(done, src.GetImgItemCh(done), *resultN, *workersNum) {
+		if err := csv.Add(&res); err != nil {
 			log.Printf("Error during saving results for image %s: %s", res.Name, err)
 		}
 	}
